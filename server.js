@@ -32,12 +32,22 @@ db.exec(`
   );
 `);
 
+/* Migration: entries from external systems (LPU5 radio log, alerts, reports)
+   are flagged so that a TSL client saving its full state cannot erase them. */
+if (!db.prepare('PRAGMA table_info(log_entries)').all().some(c => c.name === 'ext')) {
+  db.exec('ALTER TABLE log_entries ADD COLUMN ext INTEGER NOT NULL DEFAULT 0');
+}
+
+/* Optional shared key for external writers (env TSL_API_KEY) */
+const API_KEY = process.env.TSL_API_KEY || '';
+
 /* Prepared statements */
 const stmtGetState   = db.prepare('SELECT value FROM state WHERE key = ?');
 const stmtSetState   = db.prepare('INSERT OR REPLACE INTO state (key, value) VALUES (?, ?)');
 
-const stmtGetLog     = db.prepare('SELECT id, zeit, von, an, art, inhalt FROM log_entries ORDER BY id ASC');
-const stmtInsertLog  = db.prepare('INSERT INTO log_entries (zeit, von, an, art, inhalt) VALUES (@zeit, @von, @an, @art, @inhalt)');
+const stmtGetLog     = db.prepare('SELECT id, zeit, von, an, art, inhalt, ext FROM log_entries ORDER BY id ASC');
+const stmtInsertLog  = db.prepare('INSERT INTO log_entries (zeit, von, an, art, inhalt, ext) VALUES (@zeit, @von, @an, @art, @inhalt, @ext)');
+const logKey = e => [e.zeit, e.von, e.an, e.art, e.inhalt].map(v => String(v || '')).join('\u0001');
 const stmtDeleteLog  = db.prepare('DELETE FROM log_entries WHERE id = ?');
 const stmtClearLog   = db.prepare('DELETE FROM log_entries');
 
@@ -70,7 +80,7 @@ app.get('/api/state', (req, res) => {
     const state = {
       units:           getJson('units',           []),
       types:           getJson('types',           []),
-      log:             logRows.map(r => ({ zeit: r.zeit, von: r.von, an: r.an, art: r.art, inhalt: r.inhalt })),
+      log:             logRows.map(r => ({ zeit: r.zeit, von: r.von, an: r.an, art: r.art, inhalt: r.inhalt, ...(r.ext ? { ext: 1 } : {}) })),
       unitStatuses:    getJson('unitStatuses',    {}),
       customStatuses:  getJson('customStatuses',  []),
       builtinStatuses: getJson('builtinStatuses', []),
@@ -109,6 +119,9 @@ app.post('/api/state', (req, res) => {
 
       /* Sync log entries: replace all with incoming data */
       if (Array.isArray(body.log)) {
+        /* External entries the client has not seen yet survive the replace */
+        const incoming = new Set(body.log.map(logKey));
+        const keepExt = stmtGetLog.all().filter(r => r.ext && !incoming.has(logKey(r)));
         stmtClearLog.run();
         for (const e of body.log) {
           stmtInsertLog.run({
@@ -117,8 +130,10 @@ app.post('/api/state', (req, res) => {
             an:     String(e.an     || ''),
             art:    String(e.art    || ''),
             inhalt: String(e.inhalt || ''),
+            ext:    e.ext ? 1 : 0,
           });
         }
+        for (const r of keepExt) stmtInsertLog.run({ zeit: r.zeit, von: r.von, an: r.an, art: r.art, inhalt: r.inhalt, ext: 1 });
       }
     });
     saveAll();
@@ -137,12 +152,16 @@ app.post('/api/log', (req, res) => {
     if (!e || typeof e !== 'object') {
       return res.status(400).json({ error: 'Invalid payload' });
     }
+    if (e.ext && API_KEY && req.get('X-API-Key') !== API_KEY) {
+      return res.status(401).json({ error: 'Invalid API key' });
+    }
     const info = stmtInsertLog.run({
       zeit:   String(e.zeit   || ''),
-      von:    String(e.von    || ''),
-      an:     String(e.an     || ''),
-      art:    String(e.art    || ''),
-      inhalt: String(e.inhalt || ''),
+      von:    String(e.von    || '').slice(0, 200),
+      an:     String(e.an     || '').slice(0, 200),
+      art:    String(e.art    || '').slice(0, 100),
+      inhalt: String(e.inhalt || '').slice(0, 5000),
+      ext:    e.ext ? 1 : 0,
     });
     res.json({ ok: true, id: info.lastInsertRowid });
   } catch (err) {

@@ -2468,6 +2468,26 @@
     }
   }
 
+  /* Pull entries other systems (LPU5: radio log, alerts, reports) appended
+     on the server, so they show up live and are kept on the next save. */
+  const _logKey = e => [e.zeit, e.von, e.an, e.art, e.inhalt].map(v => String(v || '')).join('\u0001');
+  async function pullExternalLog() {
+    if (!backendAvailable) return;
+    try {
+      const res = await fetch(getApiBase() + '/api/state');
+      if (!res.ok) return;
+      const data = await res.json();
+      if (!Array.isArray(data.log)) return;
+      const known = new Set(log.map(_logKey));
+      const fresh = data.log.filter(e => e.ext && !known.has(_logKey(e)));
+      if (!fresh.length) return;
+      fresh.forEach(e => log.push(e));
+      renderLog(true);
+      try { localStorage.setItem('tsl_log', JSON.stringify(log)); } catch (_) { /* ignore */ }
+    } catch (_) { /* offline */ }
+  }
+  setInterval(pullExternalLog, 5000);
+
   async function loadFromBackend() {
     try {
       const res = await fetch(getApiBase() + '/api/state');

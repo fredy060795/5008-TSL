@@ -64,3 +64,14 @@ TSL/
 ├── package.json
 └── tsl.db           # Datenbank (wird automatisch erstellt)
 ```
+
+## Anbindung an LPU5 Tactical
+
+LPU5 kann Funk-Mitschriften (Whisper), Notrufe, Meldungen (MEDEVAC, SALUTE, Lagemeldung)
+und KI-Videoalarme automatisch ins Lagetagebuch schreiben (`POST /api/log` mit `ext: true`).
+
+- In LPU5 `config.json`: `"tsl_url": "http://<TSL-Rechner>:5008"` (optional `"tsl_api_key"`).
+- Optional hier: Umgebungsvariable `TSL_API_KEY` setzen – dann werden externe Einträge nur
+  mit passendem Schlüssel (`X-API-Key`) angenommen.
+- Externe Einträge sind markiert und bleiben erhalten, auch wenn ein TSL-Arbeitsplatz mit
+  älterem Stand speichert. Geöffnete TSL-Seiten holen neue externe Einträge alle 5 Sekunden.
